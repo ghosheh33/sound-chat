@@ -204,6 +204,7 @@ function onEvent(e) {
       if (!now.has(id)) { addSys(t('left', { name })); S.known.delete(id); }
     }
     renderHeader();
+    renderReach(e.reach);
   } else if (e.type === 'message') {
     const m = e.msg;
     addMsg({ kind: 'msg', key: m.key, mine: m.mine, name: m.name, text: m.text, time: Date.now(), status: m.status });
@@ -224,6 +225,28 @@ function onEvent(e) {
     S.tx = e.on;
   }
 }
+
+function renderReach(r) {
+  const box = $('#reachWarn');
+  if (!r || !r.notHeardBy.length) { box.hidden = true; return; }
+  const names = r.notHeardBy.map((p) => p.name || t('someone'));
+  const total = S.node ? S.node.activePeers().length : r.notHeardBy.length;
+  const txt = r.notHeardBy.length >= total // every phone we hear has said it does not hear us
+    ? t('nobodyHears')
+    : t('notHeardBy', { names: names.join(getLang() === 'ar' ? ' و' : ', '), verb: names.length > 1 ? t('verbMany') : t('verbOne') });
+  $('#reachTxt').textContent = `${txt} ${t('reachFix')}`;
+  $('#useAudible').hidden = S.profile === 'audible';
+  box.hidden = false;
+}
+$('#useAudible').addEventListener('click', () => {
+  S.profile = 'audible';
+  store.set('sc-profile', 'audible');
+  renderProfiles($('#profiles'));
+  renderProfiles($('#profiles2'));
+  S.node?.sendHello(true);
+  $('#useAudible').hidden = true;
+});
+$('#openSettings').addEventListener('click', () => $('#settingsSheet').showModal());
 
 function renderHeader() {
   $('#roomTitle').textContent = t('roomTitle', { n: S.room });
@@ -367,7 +390,17 @@ $('#peopleBtn').addEventListener('click', () => {
   list.append(meLi);
   for (const p of S.node?.activePeers() || []) {
     const li = el('li');
-    li.append(el('span', null, p.name || t('someone')), el('span', 'muted', t('lastSeen', { t: ago(performance.now() - p.lastSeen) })));
+    const who = el('span');
+    who.append(el('span', null, p.name || t('someone')), el('br'),
+      el('small', p.hearsMe === true ? 'ok' : p.hearsMe === false ? 'bad' : 'muted',
+        p.hearsMe === true ? t('hearsYou') : p.hearsMe === false ? t('notHearYou') : t('unknownHear')));
+    li.append(who, el('span', 'muted', t('lastSeen', { t: ago(performance.now() - p.lastSeen) })));
+    list.append(li);
+  }
+  for (const p of S.node?.indirectPeers().values() || []) {
+    const li = el('li', 'indirect');
+    li.append(el('span', null, t('someoneUnknown')),
+      el('span', 'muted', t('indirect', { via: p.via.filter(Boolean).join(getLang() === 'ar' ? '، ' : ', ') || t('someone') })));
     list.append(li);
   }
   $('#peopleTitle').textContent = people(S.node ? S.node.count() : 1);
@@ -375,6 +408,12 @@ $('#peopleBtn').addEventListener('click', () => {
 });
 $('#settingsBtn').addEventListener('click', () => $('#settingsSheet').showModal());
 document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => b.closest('dialog').close()));
+$('#muteTx').checked = store.get('sc-mute-tx', audio.muteWhileSending);
+audio.muteWhileSending = $('#muteTx').checked;
+$('#muteTx').addEventListener('change', () => {
+  audio.muteWhileSending = $('#muteTx').checked;
+  store.set('sc-mute-tx', audio.muteWhileSending);
+});
 $('#vol').value = store.get('sc-vol', 0.8);
 $('#volOut').textContent = `${Math.round($('#vol').value * 100)}%`;
 $('#vol').addEventListener('input', () => {

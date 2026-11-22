@@ -4,8 +4,11 @@
 //   [0] 0xC0 | type     [1..2] sender id     [3] room     [4] payload length
 //   [5..] payload
 // Types:
-//   HELLO  flags(1) | name length(1) | name        presence, sent on join,
-//                                                  every ~50 s, and as a reply
+//   HELLO  flags(1) | name length(1) | name | count(1) | heard ids(2) × count
+//          presence, sent on join, every ~50 s and as a reply. The ids are the
+//          phones the sender hears, so everyone learns who hears whom: a phone
+//          heard by only some of the others is still counted, and a phone that
+//          nobody hears finds out.
 //   MSG    message id(2) | part(1) | parts(1) | frames left in this burst(1) | UTF-8 text chunk
 //          (frames left lets every listener know when the burst ends, even if
 //          it misses the last frame)
@@ -26,6 +29,8 @@ export const MAX_PARTS = 16; // one bit per part in an ACK's missing mask
 const ACK_ENTRY = 6;
 const MSG_HEAD = 5;
 export const PEER_TIMEOUT = 150000; // ms without hearing someone before they are gone
+const LIST_FRESH = 90000; // a greeting lists only phones heard this recently
+const LIST_VALID = 75000; // others' lists older than this are not used to count people
 const RESEND_WINDOW = 15 * 60000; // unconfirmed messages this recent are resent to someone who comes back
 const RESEND_MAX = 5; // at most this many at a time
 const HELLO_EVERY = [40000, 60000];
@@ -61,7 +66,16 @@ export function parse(content) {
   switch (type) {
     case TYPE.HELLO:
       if (len < 2 || 2 + p[1] > len) return null;
-      return { ...f, wantReply: !!(p[0] & 1), name: dec.decode(p.subarray(2, 2 + p[1])) };
+    {
+      const nl = p[1];
+      const hears = [];
+      if (len >= 3 + nl) {
+        const n = p[2 + nl];
+        if (len < 3 + nl + n * 2) return null;
+        for (let i = 0; i < n; i++) hears.push((p[3 + nl + i * 2] << 8) | p[4 + nl + i * 2]);
+      }
+      return { ...f, wantReply: !!(p[0] & 1), name: dec.decode(p.subarray(2, 2 + nl)), hears };
+    }
     case TYPE.MSG:
       if (len < MSG_HEAD || p[3] === 0 || p[3] > MAX_PARTS || p[2] >= p[3]) return null;
       return { ...f, msgId: (p[0] << 8) | p[1], part: p[2], parts: p[3], left: p[4], chunk: p.slice(MSG_HEAD) };
@@ -200,7 +214,8 @@ export class ChatNode {
   }
 
   _scheduleHello() {
-    const early = this.clock.now() - this.startedAt < 120000;
+    // greet often at first, and while someone does not hear us (to get back in quickly)
+    const early = this.clock.now() - this.startedAt < 120000 || this.reach().notHeardBy.length > 0;
     this._after(rand(...(early ? HELLO_EARLY : HELLO_EVERY)), () => {
       if (!this.running) return;
       this.sendHello(false);
@@ -219,18 +234,55 @@ export class ChatNode {
     this._after(5000, () => this._prune());
   }
 
-  /** Active participants other than me. */
+  /**
+   * Participants I hear directly. hearsMe: true / false from their latest
+   * greeting, null if they have not greeted since I joined.
+   */
   activePeers() {
-    return [...this.peers.entries()].map(([id, p]) => ({ id, ...p }));
+    return [...this.peers.entries()].map(([id, p]) => ({
+      id, name: p.name, lastSeen: p.lastSeen, hearsMe: p.hearsMe ?? null,
+    }));
   }
 
-  /** People in the conversation, including me. */
+  /** Participants I do not hear but others do: id -> { via: [names] }. */
+  indirectPeers() {
+    const now = this.clock.now();
+    const out = new Map();
+    for (const [vid, p] of this.peers) {
+      if (!p.hears || now - p.listAt > LIST_VALID) continue;
+      for (const id of p.hears) {
+        if (id === this.id || this.peers.has(id) || this.gone?.has(id)) continue;
+        if (!out.has(id)) out.set(id, { id, via: [] });
+        out.get(id).via.push(p.name || '');
+      }
+    }
+    return out;
+  }
+
+  /** Everyone in the conversation, including me and those I only know about through others. */
   count() {
-    return this.peers.size + 1;
+    return this.peers.size + this.indirectPeers().size + 1;
+  }
+
+  /** We transmitted within the window their greeting covers (and not just now). */
+  _couldHaveHeardMe(now) {
+    return (this.txEnds || []).some((t) => t < now - this.io.frameTime - 1500 && t > now - LIST_FRESH + 5000);
+  }
+
+  /** Who hears me: those whose latest greeting lists me, and those whose does not. */
+  reach() {
+    const peers = this.activePeers();
+    return {
+      heardBy: peers.filter((p) => p.hearsMe === true),
+      notHeardBy: peers.filter((p) => p.hearsMe === false),
+    };
   }
 
   _peersChanged() {
-    this.onEvent({ type: 'peers', peers: this.activePeers(), count: this.count() });
+    this.onEvent({
+      type: 'peers', peers: this.activePeers(), indirect: [...this.indirectPeers().values()],
+      count: this.count(), reach: this.reach(),
+    });
   }
 
   // ---------- sending ----------
@@ -243,13 +295,25 @@ export class ChatNode {
   }
 
   sendHello(wantReply) {
-    const name = truncUtf8(this.name, Math.min(24, this.io.frameSize - HEADER - 2));
-    const p = new Uint8Array(2 + name.length);
+    this.queue = this.queue.filter((j) => j.kind !== 'hello');
+    // built when it goes on air, so the list of who we hear is current
+    this._enqueue(this._job('hello', [], { wantReply }));
+  }
+
+  _helloFrame(wantReply) {
+    const room = this.io.frameSize - HEADER;
+    const now = this.clock.now();
+    const heard = [...this.peers.entries()].filter(([, p]) => now - p.lastSeen < LIST_FRESH)
+      .sort((a, b) => b[1].lastSeen - a[1].lastSeen)
+      .slice(0, Math.max(0, Math.min(12, Math.floor((room - 3 - 8) / 2)))).map(([id]) => id);
+    const name = truncUtf8(this.name, Math.max(0, Math.min(24, room - 3 - heard.length * 2)));
+    const p = new Uint8Array(3 + name.length + heard.length * 2);
     p[0] = wantReply ? 1 : 0;
     p[1] = name.length;
     p.set(name, 2);
-    this.queue = this.queue.filter((j) => j.kind !== 'hello');
-    this._enqueue(this._job('hello', [this._frame(TYPE.HELLO, p)]));
+    p[2 + name.length] = heard.length;
+    heard.forEach((id, i) => { p[3 + name.length + i * 2] = id >> 8; p[4 + name.length + i * 2] = id & 0xff; });
+    return this._frame(TYPE.HELLO, p);
   }
 
   /** Sends a text message to everyone in the room. Returns the message object. */
@@ -361,6 +425,7 @@ export class ChatNode {
         }
         const job = this._nextJob(this.clock.now());
         if (!job) continue;
+        if (job.kind === 'hello') job.frames = [this._helloFrame(job.wantReply)];
         if (job.kind === 'ack') {
           const list = [...this.pendingAcks.values()].slice(0, Math.floor((this.io.frameSize - HEADER - 1) / ACK_ENTRY));
           if (!list.length) continue;
@@ -386,6 +451,8 @@ export class ChatNode {
         this.onEvent({ type: 'tx', on: true, kind: job.kind });
         await this.io.transmit(job.frames);
         this.onEvent({ type: 'tx', on: false, kind: job.kind });
+        (this.txEnds ||= []).push(this.clock.now());
+        if (this.txEnds.length > 20) this.txEnds.shift();
         if (job.kind === 'msg') {
           this._reserve(this.id, this.clock.now());
           this._afterSent(job.msg);
@@ -510,11 +577,31 @@ export class ChatNode {
     this.lastHeard = now;
     const known = this.peers.get(f.from);
     if (f.type === TYPE.BYE) {
-      if (known) { this.peers.delete(f.from); this._peersChanged(); }
+      (this.gone ||= new Set()).add(f.from); // not counted through others' lists either
+      if (known) this.peers.delete(f.from);
+      this._peersChanged();
       return f;
     }
+    this.gone?.delete(f.from);
     const name = f.type === TYPE.HELLO ? f.name : known?.name || '';
-    this.peers.set(f.from, { name, lastSeen: now });
+    const entry = {
+      name, lastSeen: now, hears: known?.hears || null, listAt: known?.listAt || 0,
+      hearsMe: known?.hearsMe ?? null, misses: known?.misses || 0,
+    };
+    if (f.type === TYPE.HELLO) {
+      entry.hears = new Set(f.hears);
+      entry.listAt = now;
+      if (entry.hears.has(this.id)) {
+        entry.hearsMe = true;
+        entry.misses = 0;
+      } else if (this._couldHaveHeardMe(now)) {
+        // Left out although we transmitted while they were listening. Twice in
+        // a row before concluding (a single frame of ours may just have been lost).
+        entry.misses++;
+        if (entry.misses >= 2) entry.hearsMe = false;
+      }
+    }
+    this.peers.set(f.from, entry);
     // Back after a silence, or new: give them what they missed.
     if (!known && this.running) this._after(rand(1500, 4000), () => this._resendTo(f.from, this.clock.now()));
     // Heard someone new without their greeting: ask everyone to introduce themselves.
@@ -522,7 +609,7 @@ export class ChatNode {
       this.lastAsk = now;
       this.sendHello(true);
     }
-    if (!known || (f.type === TYPE.HELLO && known.name !== f.name)) this._peersChanged();
+    if (!known || f.type === TYPE.HELLO) this._peersChanged();
     // Someone we did not know yet joins the expected list of messages still waiting for acks.
     if (f.type === TYPE.HELLO) {
       if (f.wantReply && now - this.lastHelloReply > 10000 && this.running) {

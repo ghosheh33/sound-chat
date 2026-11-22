@@ -65,6 +65,7 @@ class World {
     const overlap = this.tx.some((x) => x !== rec && x.from !== rec.from && x.start < rec.end && rec.start < x.end);
     for (const n of this.nodes) {
       if (n === rec.from || n.off) continue;
+      if (this.blocked?.has(`${rec.from.name}>${n.name}`)) continue; // n cannot hear this phone at all
       const talking = this.tx.some((x) => x.from === n && x.start < rec.end && rec.start < x.end);
       if (overlap || talking) { this.stats.collided++; continue; }
       if (Math.random() < this.loss) { this.stats.lost++; n.noteActivity(); if (process.env.V && this.trace) console.log(`          lost at ${n.name}`); continue; } // heard, not decoded
@@ -205,5 +206,43 @@ const statusOf = (m) => `${m.status} ${m.ackedBy.size}/${m.expected.size}`;
   assert.equal(m.status, 'delivered', statusOf(m));
   assert.equal(b.messages.at(-1)?.text, 'هل من أحد هنا؟');
   console.log('sent to an empty room: kept, delivered when someone joined');
+}
+// ---- 7) A phone some others cannot hear (weak speaker at 19 kHz) ----
+{
+  const w = new World({ loss: 0.05 });
+  const a = w.add('أحمد'), b = w.add('سارة'), c = w.add('Omar');
+  w.blocked = new Set(['Omar>سارة']); // Sara cannot hear Omar; everything else works
+  [a, b, c].forEach((n) => n.start());
+  await w.run(120000);
+  assert.equal(a.count(), 3);
+  assert.equal(b.count(), 3, 'Sara still counts Omar, through Ahmed');
+  assert.equal(c.count(), 3);
+  assert.equal(b.activePeers().length, 1);
+  assert.deepEqual([...b.indirectPeers().values()].map((x) => x.via), [['أحمد']]);
+  const r = c.reach();
+  assert.deepEqual(r.notHeardBy.map((p) => p.name), ['سارة'], 'Omar learns that Sara does not hear him');
+  assert.deepEqual(r.heardBy.map((p) => p.name), ['أحمد']);
+  assert.equal(a.reach().notHeardBy.length, 0);
+  console.log('one-way link: everyone counts 3; Omar knows Sara cannot hear him');
+
+  // everyone hears again: the warning clears
+  w.blocked = new Set();
+  await w.run(150000);
+  assert.equal(c.reach().notHeardBy.length, 0);
+  assert.equal(b.activePeers().length, 2);
+  console.log('link restored: warning cleared, Sara hears Omar directly');
+}
+
+// ---- 8) Nobody hears this phone ----
+{
+  const w = new World({ loss: 0.05 });
+  const a = w.add('أحمد'), b = w.add('سارة');
+  w.blocked = new Set(['سارة>أحمد']);
+  a.start(); b.start();
+  await w.run(120000);
+  assert.equal(b.count(), 2);
+  assert.deepEqual(b.reach().notHeardBy.map((p) => p.name), ['أحمد'], 'Sara is told nobody hears her');
+  assert.equal(a.count(), 1, 'Ahmed has no way to know about Sara');
+  console.log('nobody hears a phone: that phone is warned');
 }
 console.log('chat: ok');

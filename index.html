@@ -57,6 +57,13 @@
       </button>
     </header>
     <div class="state" id="state"><span class="meter"><i id="meter"></i></span><span id="stateTxt"></span></div>
+    <div class="warn" id="reachWarn" hidden>
+      <p id="reachTxt"></p>
+      <div class="warn-actions">
+        <button id="useAudible" data-i18n="useAudible"></button>
+        <button id="openSettings" data-i18n="settings"></button>
+      </div>
+    </div>
 
     <main class="log" id="log" aria-live="polite"></main>
 
@@ -87,6 +94,11 @@
     </fieldset>
     <label class="field"><span><span data-i18n="volume"></span> <output id="volOut">80%</output></span>
       <input type="range" id="vol" min="0.2" max="1" step="0.05" value="0.8">
+      <small class="muted" data-i18n="volumeHint"></small>
+    </label>
+    <label class="switch-row">
+      <input type="checkbox" id="muteTx">
+      <span><b data-i18n="muteTx"></b><br><small class="muted" data-i18n="muteTxHint"></small></span>
     </label>
     <button class="ghost" data-close data-i18n="close"></button>
   </dialog>

@@ -460,6 +460,7 @@ export const ULTRASONIC = createModem({
   ramp: 0.004,
   taper: 0.015,
   doppler: true,
+  level: 0.75, // below full scale: a speaker driven hard at 19 kHz distorts into audible sound
   modes: [
     { id: 0, key: 'u-robust', ts: 0.040, tg: 0.016, groups: 4, tones: 16, f0: 18200, n: 64, nsym: 20 },
     { id: 1, key: 'u-normal', ts: 0.024, tg: 0.010, groups: 12, tones: 4, f0: 18000, n: 96, nsym: 24 },

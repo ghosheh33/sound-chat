@@ -122,6 +122,18 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .msg .meta button { border: 0; background: rgb(255 255 255 / 0.2); color: inherit; border-radius: 99px; padding: 0 8px; cursor: pointer; font-size: 0.72rem; }
 .msg.failed { outline: 2px solid var(--bad); }
 .ticks { letter-spacing: -3px; }
+.warn {
+  background: color-mix(in srgb, var(--warn) 14%, var(--card)); border-bottom: 1px solid var(--line);
+  padding: 8px 14px; font-size: 0.85rem; display: grid; gap: 6px;
+}
+.warn p { margin: 0; }
+.warn-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.warn-actions button { border: 1px solid var(--line); background: var(--card); color: var(--text); border-radius: 99px; padding: 4px 12px; cursor: pointer; font-size: 0.82rem; }
+.switch-row { display: flex; gap: 10px; align-items: flex-start; margin-top: 14px; font-size: 0.92rem; }
+.switch-row input { width: 20px; height: 20px; margin-top: 2px; accent-color: var(--accent); flex: none; }
+.people-list .ok { color: var(--ok); }
+.people-list .bad { color: var(--bad); }
+.people-list li.indirect { opacity: 0.85; border: 1px dashed var(--line); background: none; }
 .incoming { font-size: 0.8rem; color: var(--muted); padding: 2px 16px 4px; }
 
 .composer { display: flex; align-items: flex-end; gap: 8px; padding: 8px 10px max(10px, env(safe-area-inset-bottom)); background: var(--card); border-top: 1px solid var(--line); }
