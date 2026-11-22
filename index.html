@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <title>دردشة بالصوت</title>
+  <meta name="description" content="محادثة جماعية بين هواتف قريبة عبر صوت لا تسمعه الأذن، بدون إنترنت.">
+  <meta name="theme-color" content="#4338ca">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- JOIN -->
+  <section id="join" class="screen">
+    <div class="join-card">
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 48 48"><path d="M10 34c-3-3-4-6-4-10C6 14 14 7 24 7s18 7 18 17-8 17-18 17c-3 0-6-.6-8.5-1.8L8 42l2-8z"/><path class="waves" d="M17 24h.01M21 20v8M25 17v14M29 20v8M33 24h.01"/></svg>
+      </div>
+      <h1 data-i18n="app"></h1>
+      <p class="muted" data-i18n="tagline"></p>
+
+      <label class="field"><span data-i18n="yourName"></span>
+        <input id="name" maxlength="24" autocomplete="nickname" data-i18n-ph="namePh">
+      </label>
+      <label class="field"><span data-i18n="room"></span>
+        <input id="room" type="number" inputmode="numeric" min="0" max="255" value="1">
+        <small class="muted" data-i18n="roomHint"></small>
+      </label>
+
+      <fieldset class="field">
+        <legend data-i18n="sound"></legend>
+        <div class="profiles" id="profiles"></div>
+      </fieldset>
+
+      <button class="primary" id="joinBtn" data-i18n="join"></button>
+      <button class="ghost" id="testBtn" data-i18n="testDevice"></button>
+      <p class="status" id="joinStatus" role="status"></p>
+      <p class="muted small" data-i18n="note"></p>
+      <button class="lang" id="langBtn">English</button>
+    </div>
+  </section>
+
+  <!-- CHAT -->
+  <section id="chat" class="screen" hidden>
+    <header class="bar">
+      <button class="icon" id="leaveBtn" aria-label="leave">
+        <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <div class="title">
+        <b id="roomTitle"></b>
+        <button class="people" id="peopleBtn"><span class="dot" id="dot"></span><span id="peopleTxt"></span></button>
+      </div>
+      <button class="icon" id="settingsBtn" aria-label="settings">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </button>
+    </header>
+    <div class="state" id="state"><span class="meter"><i id="meter"></i></span><span id="stateTxt"></span></div>
+
+    <main class="log" id="log" aria-live="polite"></main>
+
+    <div class="incoming" id="incoming" hidden></div>
+    <form class="composer" id="composer">
+      <div class="input-wrap">
+        <textarea id="msg" rows="1" dir="auto" data-i18n-ph="msgPh"></textarea>
+        <small class="muted" id="counter"></small>
+      </div>
+      <button class="send" id="sendBtn" type="submit" aria-label="send">
+        <svg viewBox="0 0 24 24"><path d="M4 12l16-8-6 16-2.5-6.5z"/></svg>
+      </button>
+    </form>
+  </section>
+
+  <!-- SHEETS -->
+  <dialog id="peopleSheet" class="sheet">
+    <h2 id="peopleTitle"></h2>
+    <ul id="peopleList" class="people-list"></ul>
+    <button class="ghost" data-close data-i18n="close"></button>
+  </dialog>
+
+  <dialog id="settingsSheet" class="sheet">
+    <h2 data-i18n="settings"></h2>
+    <fieldset class="field">
+      <legend data-i18n="sound"></legend>
+      <div class="profiles" id="profiles2"></div>
+    </fieldset>
+    <label class="field"><span><span data-i18n="volume"></span> <output id="volOut">80%</output></span>
+      <input type="range" id="vol" min="0.2" max="1" step="0.05" value="0.8">
+    </label>
+    <button class="ghost" data-close data-i18n="close"></button>
+  </dialog>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

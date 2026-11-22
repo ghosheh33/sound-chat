@@ -1,0 +1,8 @@
+{
+  "name": "sound-chat",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node test/modem.test.mjs && node test/chat.test.mjs"
+  }
+}
