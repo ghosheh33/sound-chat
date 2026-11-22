@@ -74,6 +74,17 @@ export class ChatAudio {
     this._micOff();
   }
 
+  /** After the page was hidden: resume suspended audio, reopen a microphone the system stopped. */
+  async wake() {
+    if (!this.wantMic) return;
+    const m = this.mic;
+    const dead = m && (m.stream.getAudioTracks().every((t) => t.readyState === 'ended') || m.ctx.state === 'closed');
+    if (dead) this._micOff();
+    else if (m && m.ctx.state !== 'running') await m.ctx.resume();
+    if (this.out && this.out.state !== 'running') await this.out.resume();
+    if (!this.mic && !this.sending) await this._micOn();
+  }
+
   async _ensureOut() {
     if (!this.out) {
       this.out = new AudioContext({ latencyHint: 'interactive' });

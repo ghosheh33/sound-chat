@@ -69,8 +69,15 @@ async function keepAwake(on) {
     }
   } catch { /* not allowed */ }
 }
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && S.node) keepAwake(true);
+// A locked screen or a backgrounded app stops the microphone. When we are
+// back: wake the audio up and say hello, so the others resend what we missed.
+let hiddenAt = 0;
+document.addEventListener('visibilitychange', async () => {
+  if (!S.node) return;
+  if (document.visibilityState === 'hidden') { hiddenAt = performance.now(); return; }
+  keepAwake(true);
+  try { await audio.wake(); } catch { /* permission lost */ }
+  if (performance.now() - hiddenAt > 3000) S.node.sendHello(true);
 });
 
 // ---------- join screen ----------
@@ -162,6 +169,7 @@ function enterRoom() {
   S.node.start();
   $('#join').hidden = true;
   $('#chat').hidden = false;
+  if (!wakeLock && !navigator.wakeLock) addSys(t('backgroundWarn'));
   renderHeader();
   renderLog();
   updateCounter();
@@ -243,10 +251,11 @@ function statusText(it) {
   switch (it.status) {
     case 'queued': return ['🕓', t('queued')];
     case 'sending': return ['🕓', t('sending')];
-    case 'sent': return it.acked ? ['✓', t('deliveredTo', { n: it.acked, m: it.expected })] : ['✓', t('sent')];
-    case 'sent-nobody': return ['✓', t('sentNobody')];
+    // one tick = sent, not yet confirmed; two = everyone confirmed (like other chat apps)
+    case 'sent': return it.acked ? ['✓', `${t('deliveredTo', { n: it.acked, m: it.expected })} · ${t('sent')}`] : ['✓', t('sent')];
+    case 'nobody': return ['🕓', t('nobody')];
     case 'delivered': return ['✓✓', t('delivered')];
-    case 'partial': return ['⚠', t('deliveredTo', { n: it.acked, m: it.expected })];
+    case 'partial': return ['⚠', `${t('deliveredTo', { n: it.acked, m: it.expected })} · ${t('partialHint')}`];
     case 'failed': return ['⚠', t('failed')];
     default: return ['', ''];
   }
@@ -281,10 +290,9 @@ function renderItem(it) {
     if (!it.old && (it.status === 'failed' || it.status === 'partial') && S.node) {
       const r = el('button', null, t('retry'));
       r.addEventListener('click', () => {
-        S.items = S.items.filter((x) => x !== it);
-        S.node.send(it.text); // appears again at the bottom with a fresh status
-        persist();
-        renderLog();
+        const m = S.node.messages.find((x) => x.key === it.key);
+        if (m) S.node.resend(m); // same message: whoever already has it just confirms
+        else { S.items = S.items.filter((x) => x !== it); S.node.send(it.text); persist(); renderLog(); }
       });
       meta.append(r);
     } else if (it.status !== 'delivered') {

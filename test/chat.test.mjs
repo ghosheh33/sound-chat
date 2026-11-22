@@ -55,6 +55,7 @@ class World {
   }
 
   _deliver(rec) {
+    if (rec.from.off) return; // a phone in the background does not play anything
     this.stats.frames++;
     if (process.env.V && this.trace) {
       const f = parse(rec.content);
@@ -170,5 +171,39 @@ const statusOf = (m) => `${m.status} ${m.ackedBy.size}/${m.expected.size}`;
   const f = new Uint8Array(64); f[0] = 0xc0 | TYPE.MSG; f[4] = 200;
   assert.equal(parse(f), null);
   console.log('rooms: separate rooms do not see each other; invalid frames ignored');
+}
+// ---- 5) The other phone goes quiet (screen locked / app in background) and comes back ----
+{
+  const w = new World({ loss: 0.05 });
+  const a = w.add('أحمد'), b = w.add('سارة');
+  a.start(); b.start();
+  await w.run(60000); // opened at the same moment: first greetings may collide
+  assert.equal(a.count(), 2);
+  b.off = true; // screen off: hears nothing, says nothing
+  const m = a.send('رسالة أثناء قفل شاشة سارة');
+  await w.run(210000); // longer than the presence timeout
+  assert.notEqual(m.status, 'delivered');
+  assert.notEqual(m.status, 'sent', 'must not look sent while nobody confirmed it');
+  b.off = false; // back
+  await w.run(120000);
+  assert.equal(m.status, 'delivered', `after return: ${statusOf(m)}`);
+  assert.equal(b.messages.at(-1)?.text, 'رسالة أثناء قفل شاشة سارة');
+  console.log(`screen locked 3.5 min: shown as "${'waiting'}", delivered after the phone came back (tries ${m.tries})`);
+}
+
+// ---- 6) Sent before anyone was heard: delivered when someone appears ----
+{
+  const w = new World({ loss: 0.05 });
+  const a = w.add('أحمد'), b = w.add('سارة');
+  a.start();
+  await w.run(2000);
+  const m = a.send('هل من أحد هنا؟');
+  await w.run(30000);
+  assert.equal(m.status, 'nobody');
+  b.start();
+  await w.run(90000);
+  assert.equal(m.status, 'delivered', statusOf(m));
+  assert.equal(b.messages.at(-1)?.text, 'هل من أحد هنا؟');
+  console.log('sent to an empty room: kept, delivered when someone joined');
 }
 console.log('chat: ok');

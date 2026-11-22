@@ -26,6 +26,8 @@ export const MAX_PARTS = 16; // one bit per part in an ACK's missing mask
 const ACK_ENTRY = 6;
 const MSG_HEAD = 5;
 export const PEER_TIMEOUT = 150000; // ms without hearing someone before they are gone
+const RESEND_WINDOW = 15 * 60000; // unconfirmed messages this recent are resent to someone who comes back
+const RESEND_MAX = 5; // at most this many at a time
 const HELLO_EVERY = [40000, 60000];
 const HELLO_EARLY = [15000, 25000]; // during the first two minutes, to find everyone quickly
 const HELLO_REPLY = [500, 9000]; // replies to a newcomer are spread so they do not collide
@@ -394,13 +396,53 @@ export class ChatNode {
     }
   }
 
-  _fullyAcked(msg) {
-    return [...msg.expected.keys()].every((id) => msg.ackedBy.has(id) || !this.peers.has(id));
+  /** Expected recipients who have not confirmed yet (absent ones included). */
+  _waiting(msg) {
+    return [...msg.expected.keys()].filter((id) => !msg.ackedBy.has(id));
   }
 
+  _fullyAcked(msg) {
+    return msg.expected.size > 0 && !this._waiting(msg).length;
+  }
+
+  /**
+   * queued/sending: on its way · sent: waiting for confirmations
+   * delivered: everyone confirmed · nobody: nobody to send to yet (kept)
+   * partial / failed: given up for now (resent if the missing ones come back)
+   */
   _status(msg) {
-    if (!msg.expected.size) return 'sent-nobody';
-    return msg.ackedBy.size && this._fullyAcked(msg) ? 'delivered' : 'sent';
+    if (!msg.expected.size) return 'nobody';
+    if (!this._waiting(msg).length) return 'delivered';
+    if (msg.parked) return msg.ackedBy.size ? 'partial' : 'failed';
+    return 'sent';
+  }
+
+  _setStatus(msg) {
+    if (msg.status === 'sending') return;
+    msg.status = this._status(msg);
+    this.onEvent({ type: 'update', msg });
+  }
+
+  /** Someone came back (or appeared): resend them recent messages they never confirmed. */
+  _resendTo(id, now) {
+    const due = this.messages.filter((m) => m.mine && now - m.time < RESEND_WINDOW && !m.ackedBy.has(id)
+      && (m.parked || m.status === 'nobody') && (m.expected.has(id) || !m.expected.size));
+    for (const m of due.slice(-RESEND_MAX)) {
+      if (!m.expected.has(id)) m.expected.set(id, this.peers.get(id)?.name || '');
+      this.resend(m);
+    }
+  }
+
+  /** Sends a message again (same id: those who already have it just confirm). */
+  resend(msg) {
+    msg.parked = false;
+    msg.tries = Math.min(msg.tries, RETRIES - 2);
+    msg.nacks = new Map();
+    for (const [id] of this.peers) if (!msg.expected.has(id)) msg.expected.set(id, this.peers.get(id).name);
+    if (this.queue.some((j) => j.msg === msg)) return;
+    msg.status = 'queued';
+    this.onEvent({ type: 'update', msg });
+    this._enqueue(this._job('msg', [], { msg }));
   }
 
   /**
@@ -410,7 +452,7 @@ export class ChatNode {
   _retryParts(msg) {
     const all = msg.parts.map((_, i) => i);
     if (!msg.tries) return all;
-    const waiting = [...msg.expected.keys()].filter((id) => !msg.ackedBy.has(id) && this.peers.has(id));
+    const waiting = this._waiting(msg).filter((id) => this.peers.has(id));
     if (!waiting.length || waiting.some((id) => !msg.nacks?.has(id))) return all;
     let mask = 0;
     for (const id of waiting) mask |= msg.nacks.get(id);
@@ -421,7 +463,7 @@ export class ChatNode {
   _afterSent(msg) {
     msg.status = this._status(msg);
     this.onEvent({ type: 'update', msg });
-    if (!msg.expected.size) return;
+    if (!msg.expected.size) return; // 'nobody': kept and sent when someone appears
     // wait for acknowledgements: time for everyone's back-off plus an ACK frame each,
     // extended while the channel is in use (the others cannot answer yet)
     const wait = ACK_START + (this.peers.size + 1) * this.slot + 1500;
@@ -433,11 +475,15 @@ export class ChatNode {
         this._after(2000, check);
         return;
       }
-      if (this._fullyAcked(msg)) return;
-      if (msg.tries <= RETRIES) {
+      if (this._fullyAcked(msg) || this.queue.some((j) => j.msg === msg)) return;
+      const present = this._waiting(msg).filter((id) => this.peers.has(id));
+      if (present.length && msg.tries <= RETRIES) {
         this._enqueue(this._job('msg', [], { msg }));
       } else {
-        msg.status = msg.ackedBy.size ? 'partial' : 'failed';
+        // Out of tries, or the ones still waiting are gone (screen locked, walked
+        // away): park it. It is resent as soon as they are heard again.
+        msg.parked = true;
+        msg.status = this._status(msg);
         this.onEvent({ type: 'update', msg });
       }
     };
@@ -469,6 +515,8 @@ export class ChatNode {
     }
     const name = f.type === TYPE.HELLO ? f.name : known?.name || '';
     this.peers.set(f.from, { name, lastSeen: now });
+    // Back after a silence, or new: give them what they missed.
+    if (!known && this.running) this._after(rand(1500, 4000), () => this._resendTo(f.from, this.clock.now()));
     // Heard someone new without their greeting: ask everyone to introduce themselves.
     if (!known && f.type !== TYPE.HELLO && this.running && now - (this.lastAsk || -Infinity) > 20000) {
       this.lastAsk = now;
@@ -494,8 +542,7 @@ export class ChatNode {
           continue;
         }
         msg.ackedBy.set(f.from, this.peers.get(f.from)?.name || '');
-        if (msg.status !== 'sending') msg.status = this._status(msg);
-        this.onEvent({ type: 'update', msg });
+        this._setStatus(msg);
       }
     }
     return f;
